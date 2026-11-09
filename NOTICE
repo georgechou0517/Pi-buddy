@@ -1,0 +1,12 @@
+Pi-buddy
+Copyright 2026 Pi-buddy contributors
+
+This product includes software developed by the Pi-buddy project.
+
+This distribution also embeds the Silkscreen Regular webfont as a base64
+WOFF2 inside index.html.
+Copyright 2001 The Silkscreen Project Authors
+(https://github.com/googlefonts/silkscreen)
+Licensed under the SIL Open Font License, Version 1.1.
+See OFL.txt for the full license text.
+This third-party font is NOT covered by the Apache License 2.0 above.

@@ -1,0 +1,15 @@
+# Runtime data and local settings (auto-created on first launch)
+data/
+*.log
+
+# Local agent working notes
+.workbuddy/
+
+# Third-party trademark artwork: local reference only, never distributed
+pi-official-logo.gif
+
+# Local shortcuts and OS clutter
+*.lnk
+Thumbs.db
+Desktop.ini
+.DS_Store
