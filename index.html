@@ -396,7 +396,7 @@ body.resizing,body.resizing *{cursor:col-resize!important;user-select:none!impor
       <div class="brand-text">
         <div class="brand-name">Pi-buddy</div>
       </div>
-      <div class="brand-ver" id="verText">v0.1.0</div>
+      <div class="brand-ver" id="verText">v26.11.1</div>
     </div>
 
     <button class="new-task" id="btnNew">
@@ -753,6 +753,16 @@ const state = {
    不碰聊天内容（#messages / pre / code），也不改任何业务数据。 */
 const I18N_EN = {
   '拖动调整侧边栏宽度': 'Drag to resize sidebar',
+  '连接器就是 MCP server。除了 mcp.json，也会识别 Pi 扩展在会话里动态注册的连接器（不写配置文件）。开关只在 Pi-buddy 内生效：关掉的连接器在新建会话时会被 --exclude-tools 屏蔽。':
+    'Connectors are MCP servers. Besides mcp.json, Pi-buddy also detects servers registered dynamically by Pi extensions (no config file). Toggles affect Pi-buddy only: disabled connectors are filtered with --exclude-tools in new sessions.',
+  '在终端执行 pi mcp add 名称 -- 启动命令 写入 ~/.pi/agent/mcp.json；或把注册了 registerMcpServer() 的扩展放进 ~/.pi/agent/extensions/，然后刷新本页。':
+    'Run pi mcp add <name> -- <command> in a terminal to write ~/.pi/agent/mcp.json, or place an extension that calls registerMcpServer() under ~/.pi/agent/extensions/, then reload.',
+  '三者都是「启动时的参数组合」，不改写 Pi 本身的配置。':
+    'All three are launch-time presets; Pi’s own configuration is untouched.',
+  '已启用': 'Enabled',
+  '已关闭': 'Disabled',
+  '扩展注册': 'Extension',
+  '由 Pi 扩展注册': 'Registered by a Pi extension',
   '收起侧边栏': 'Collapse sidebar',
   '展开侧边栏': 'Expand sidebar',
   '开': 'On',
@@ -916,11 +926,41 @@ const I18N_EN = {
   '点击播放': 'Play on click',
   '点击播放标志': 'Play logo animation',
   '支持 PNG / JPG / GIF / WebP / AVIF / BMP，单张不超过 10 MB；GIF 保留动画':
-    'PNG / JPG / GIF / WebP / AVIF / BMP, up to 10 MB. Animated images are supported.'
+    'PNG / JPG / GIF / WebP / AVIF / BMP, up to 10 MB. Animated images are supported.',
+  '检查更新': 'Check for updates',
+  '版本号格式为 年份.月份.第几次更新，例如 26.11.1': 'Version format: year.month.sequence, e.g. 26.11.1',
+  '尚未检查': 'Not checked yet',
+  '检查中…': 'Checking…',
+  '检查完成': 'Check complete',
+  '检查失败': 'Check failed',
+  '无法连接更新服务器，请检查网络后重试': 'Could not reach the update servers. Check your connection and try again.',
+  '暂无可用版本信息': 'No version information available',
+  '远端标签仍使用旧版本号规则，建议按新规则重新打标签':
+    'The remote tag still uses the old version scheme; please re-tag it following the new format.',
+  '下载新版': 'Download update',
+  '下载源': 'Download source',
+  '自动': 'Auto',
+  '自动模式会在后台探测 Google 连通性：大陆网络优先 Gitee，其它地区优先 GitHub':
+    'Auto mode probes Google in the background: mainland-China networks use Gitee first, elsewhere GitHub.',
+  '下载源已保存': 'Download source saved',
+  '推荐': 'Recommended',
+  '备用': 'Backup',
+  '主下载源暂时不可用，已切换到备用源': 'Preferred source unavailable; switched to the backup source',
+  '打开发布页': 'Open release page',
+  '未知错误': 'Unknown error'
 };
 
 // 带变量的动态文案用规则处理
 const I18N_RULES = [
+  [/^自动选择下载源：(Gitee|GitHub)$/, 'Auto-selected source: $1'],
+  [/^手动指定下载源：(Gitee|GitHub)$/, 'Source set manually: $1'],
+  [/^环境变量指定下载源：(Gitee|GitHub)$/, 'Source set by environment: $1'],
+  [/^网络探测失败，按系统区域选择：(Gitee|GitHub)$/, 'Probe failed; source from system region: $1'],
+  [/^当前版本 (v[\d.]+)$/, 'Current version $1'],
+  [/^当前已是最新版本 (v[\d.]+)$/, 'You are up to date ($1)'],
+  [/^发现新版本 (v[\d.]+)，当前 (v[\d.]+)$/, 'Update available: $1 (current $2)'],
+  [/^检查更新时出错：(.*)$/, 'Update check failed: $1'],
+  [/^([A-Za-z]+) · 检查失败$/, '$1 · check failed'],
   [/^(\d+) 个工具调用 · 进行中$/, '$1 tool calls · running'],
   [/^(\d+) 个工具调用$/, '$1 tool calls'],
   [/^(\d+) 个步骤$/, '$1 steps'],
@@ -1892,18 +1932,21 @@ function renderHub() {
   }
 
   if (state.hubTab === 'mcp') {
-    content += '<div class="note" style="margin-bottom:14px">连接器就是 MCP server。开关同样只在 Pi-buddy 内生效：' +
-      '关掉的连接器在新建会话时会被 <code>--exclude-tools</code> 屏蔽。</div>';
+    content += '<div class="note" style="margin-bottom:14px">连接器就是 MCP server。除了 mcp.json，也会识别 Pi 扩展在会话里动态注册的连接器（不写配置文件）。开关只在 Pi-buddy 内生效：关掉的连接器在新建会话时会被 --exclude-tools 屏蔽。</div>';
     if (!mcps.length) {
       content += '<div class="card"><div class="card-title">还没有配置 MCP</div>' +
-        '<div class="card-sub">在终端执行 <code>pi mcp add &lt;名称&gt; -- &lt;启动命令&gt;</code>，' +
-        '写入 <code>' + escapeHtml((state.boot && state.boot.home) || '~') + '\\.pi\\agent\\mcp.json</code> 后刷新本页。</div></div>';
+        '<div class="card-sub">在终端执行 pi mcp add 名称 -- 启动命令 写入 ~/.pi/agent/mcp.json；或把注册了 registerMcpServer() 的扩展放进 ~/.pi/agent/extensions/，然后刷新本页。</div></div>';
     } else {
       content += mcps.map(m => {
         const off = disabledMcp.has(m.name);
+        const isExt = m.via === 'extension';
+        const detail = isExt ? (m.description || '由 Pi 扩展注册') : [m.command, ...(m.args || [])].join(' ');
         return '<div class="card"><div class="card-row"><div class="grow">' +
-          '<div class="card-title">' + escapeHtml(m.name) + '</div>' +
-          '<div class="card-sub">' + escapeHtml([m.command, ...(m.args || [])].join(' ')) + '</div>' +
+          '<div class="card-title">' + escapeHtml(m.name) +
+          (isExt ? ' <span class="pill on">扩展注册</span>' : '') + '</div>' +
+          '<div class="card-sub">' + escapeHtml(detail) + '</div>' +
+          '<div class="card-sub" style="font-family:var(--mono);font-size:11px;margin-top:3px">' +
+          escapeHtml(m.source || '') + '</div>' +
           '</div><div class="card-actions">' +
           '<label class="switch' + (off ? '' : ' on') + '" style="margin:0"><input type="checkbox" data-mcp="' +
           escapeHtml(m.name) + '"' + (off ? '' : ' checked') + ' /><span>' + (off ? '已关闭' : '已启用') + '</span></label>' +
@@ -2079,7 +2122,8 @@ function renderSettings() {
     '<div class="card-sub" style="font-family:var(--mono);font-size:11px">' +
     escapeHtml((state.boot && state.boot.piEntry) || '使用 PATH 上的 pi') + '</div>' +
     '<div style="margin-top:10px"><button class="btn" id="btnQuit">退出 Pi-buddy</button>' +
-    '<span style="font-size:12px;color:var(--text-3);margin-left:8px">无窗口启动时用它停服务，之后需要重新双击启动</span></div></div>';
+    '<span style="font-size:12px;color:var(--text-3);margin-left:8px">无窗口启动时用它停服务，之后需要重新双击启动</span></div></div>' +
+    updateCard();
 }
 
 function renderMail() {
@@ -2088,6 +2132,89 @@ function renderMail() {
     '<div class="card-sub">邮箱需要独立的收发件服务。当前版本先保留入口，接入后可在侧栏「更多」里直接查看。</div></div>';
 }
 
+
+/* ---------------------------------------------------------------- 检查更新 */
+let updateResult = null;
+
+function updateCard() {
+  const ver = (state.boot && state.boot.version && state.boot.version.app) || '';
+  const cur = (currentApp().ui || {}).updateSource || 'auto';
+  const opts = [['auto', '自动'], ['gitee', 'Gitee'], ['github', 'GitHub']];
+  return '<div class="card"><div class="card-title" style="margin-bottom:4px">检查更新</div>' +
+    '<div class="card-sub"><span>当前版本 v' + escapeHtml(ver) +
+    '</span> · <span>版本号格式为 年份.月份.第几次更新，例如 26.11.1</span></div>' +
+    '<div class="field" style="margin-top:10px"><label>下载源</label><select id="setUpdateSource">' +
+    opts.map(o => '<option value="' + o[0] + '"' + (o[0] === cur ? ' selected' : '') + '>' + o[1] + '</option>').join('') +
+    '</select></div>' +
+    '<div class="card-sub" style="margin-top:4px">自动模式会在后台探测 Google 连通性：大陆网络优先 Gitee，其它地区优先 GitHub</div>' +
+    '<div style="margin-top:10px"><button class="btn" id="btnCheckUpdate">检查更新</button>' +
+    '<span id="updateStatus" style="font-size:12px;color:var(--text-3);margin-left:8px">尚未检查</span></div>' +
+    '<div id="updateResult" style="margin-top:8px"></div></div>';
+}
+
+function safeUpdateUrl(url) {
+  return /^https:\/\//i.test(String(url || '')) ? url : '';
+}
+
+function renderUpdateResult(data) {
+  const box = $('#updateResult');
+  if (!box) return;
+  const esc = escapeHtml;
+  const sources = (data && data.sources) || [];
+  const good = sources.filter(s => s.ok);
+  let html = '';
+  if (!data || data.ok === false) {
+    html += '<div class="note">检查更新时出错：' + esc((data && data.error) || '未知错误') + '</div>';
+  } else if (!good.length) {
+    html += '<div class="note">无法连接更新服务器，请检查网络后重试</div>';
+  } else if (data.upToDate === true) {
+    html += '<div class="note">当前已是最新版本 v' + esc(data.current) + '</div>';
+  } else if (data.upToDate === false) {
+    html += '<div class="note">发现新版本 v' + esc(data.latest) +
+      '，当前 v' + esc(data.current) + '</div>';
+  } else {
+    html += '<div class="note">暂无可用版本信息</div>';
+  }
+  if (good.some(s => !s.modern)) {
+    html += '<div class="note" style="margin-top:6px">远端标签仍使用旧版本号规则，建议按新规则重新打标签</div>';
+  }
+  const region = data && data.region;
+  const primaryLabel = (data && data.primaryLabel) || (region === 'cn' ? 'Gitee' : 'GitHub');
+  const regionSource = (data && data.regionSource) || 'system';
+  if (region) {
+    const note = regionSource === 'auto'
+      ? '自动选择下载源：' + primaryLabel
+      : regionSource === 'manual'
+        ? '手动指定下载源：' + primaryLabel
+        : regionSource === 'env'
+          ? '环境变量指定下载源：' + primaryLabel
+          : '网络探测失败，按系统区域选择：' + primaryLabel;
+    html += '<div class="card-sub" style="margin-top:8px">' + esc(note) + '</div>';
+  }
+
+  if (data && data.fallbackUsed) {
+    html += '<div class="note" style="margin-top:6px">主下载源暂时不可用，已切换到备用源</div>';
+  }
+  const upToDate = data && data.upToDate;
+  for (const s of sources) {
+    const page = safeUpdateUrl(s.page) || safeUpdateUrl(s.releases);
+    const download = safeUpdateUrl(s.download) || page;
+    const label = s.ok ? esc(s.tag) : '检查失败';
+    const badge = s.primary
+      ? '<span class="pill on" style="margin-right:6px">推荐</span>'
+      : '<span class="pill" style="margin-right:6px">备用</span>';
+    html += '<div class="row-line" style="margin-top:6px"><span class="grow" style="font-size:12.5px">' +
+      badge + esc(s.label) + ' · ' + label + '</span>' +
+      (upToDate === false && s.ok && download
+        ? '<a class="btn sm' + (s.primary ? ' primary' : '') + '" href="' + esc(download) +
+          '" target="_blank" rel="noopener">下载新版</a> '
+        : '') +
+      (page ? '<a class="btn sm" href="' + esc(page) + '" target="_blank" rel="noopener">打开发布页</a>' : '') +
+      '</div>';
+  }
+
+  box.innerHTML = html;
+}
 function bindPanel() {
   const box = $('#panel');
 
@@ -2369,6 +2496,44 @@ function bindPanel() {
     };
   }
 
+  const setUpdateSource = $('#setUpdateSource');
+  if (setUpdateSource) {
+    setUpdateSource.onchange = async () => {
+      const value = setUpdateSource.value;
+      try {
+        const data = await api('/api/settings', { method: 'POST', body: { ui: { updateSource: value } } });
+        state.boot.app = data.app;
+        updateResult = null;
+        const btn = $('#btnCheckUpdate');
+        if (btn) btn.click();
+        toast('下载源已保存');
+      } catch (err) { toast('保存失败: ' + err.message); }
+    };
+  }
+  const btnUpdate = $('#btnCheckUpdate');
+  if (btnUpdate) {
+    btnUpdate.onclick = async () => {
+      const status = $('#updateStatus');
+      const box = $('#updateResult');
+      btnUpdate.disabled = true;
+      if (status) status.textContent = '检查中…';
+      if (box) box.innerHTML = '';
+      try {
+        updateResult = await api('/api/update/check?force=1');
+        if (status) status.textContent = '检查完成';
+      } catch (err) {
+        updateResult = { ok: false, error: err.message, sources: [] };
+        if (status) status.textContent = '检查失败';
+      }
+      renderUpdateResult(updateResult);
+      btnUpdate.disabled = false;
+    };
+  }
+  if (updateResult) {
+    renderUpdateResult(updateResult);
+    const status = $('#updateStatus');
+    if (status && updateResult.ok !== false) status.textContent = '检查完成';
+  }
   const btnQuit = $('#btnQuit');
   if (btnQuit) {
     btnQuit.onclick = async () => {

@@ -35,7 +35,7 @@ const { spawn } = require('node:child_process');
 
 // ---------------------------------------------------------------- 常量
 
-const APP_VERSION = '0.1.0';
+const APP_VERSION = '26.11.1';
 const ROOT = __dirname;
 const INDEX_HTML = path.join(ROOT, 'index.html');
 const DATA_DIR = path.join(ROOT, 'data');
@@ -945,6 +945,13 @@ function scanSkills() {
   return found.sort((a, b) => a.name.localeCompare(b.name, 'zh'));
 }
 
+/*
+ * MCP 来源有两类：
+ *   1) 配置文件：~/.pi/agent/mcp.json、~/.pi/mcp.json、<space>/.pi/mcp.json
+ *   2) Pi 扩展在会话启动时调用 pi.registerMcpServer() 动态注册（不落配置文件）。
+ *      Pi 官方文档：Registrations are not saved —— 例如 agent-desktop 的扩展就是这种。
+ * 配置文件优先：同名时 mcp.json 覆盖扩展注册（与 Pi 的规则一致）。
+ */
 function scanMcp() {
   const servers = [];
   const seen = new Set();
@@ -960,18 +967,60 @@ function scanMcp() {
           name,
           command: cfg.command || cfg.url || '',
           args: Array.isArray(cfg.args) ? cfg.args : [],
-          source: file
+          source: file,
+          via: 'config'
         });
       }
     } catch { /* 文件不存在或格式不对 */ }
   };
 
-  // 全局配置
+  // 先读配置文件，保证同名时它优先
   addFrom(PI_MCP);
   addFrom(path.join(HOME, '.pi', 'mcp.json'));
-  // 项目级配置：Pi 会读当前工作目录下的 .pi/mcp.json
   for (const space of readApp().spaces || []) {
     if (space && space.path) addFrom(path.join(space.path, '.pi', 'mcp.json'));
+  }
+
+  // 再扫扩展：只做轻量静态解析，不执行扩展代码
+  const EXT_FILE = /\.(?:ts|mts|cts|js|mjs|cjs)$/i;
+  const scanExtensionDir = (dir, depth) => {
+    if (depth > 2) return;
+    let entries;
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+    for (const entry of entries) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) { scanExtensionDir(full, depth + 1); continue; }
+      if (!EXT_FILE.test(entry.name)) continue;
+      let text;
+      try { text = fs.readFileSync(full, 'utf8'); } catch { continue; }
+      const code = text.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+      // 处理 registerMcpServer(SERVER_NAME, ...) 这种用常量传名字的写法
+      const consts = new Map();
+      for (const m of code.matchAll(/(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(['"`])([^'"`\n]+)\2/g)) {
+        consts.set(m[1], m[3]);
+      }
+      for (const m of code.matchAll(/(?:\bpi\.)?registerMcpServer\s*\(\s*([^,)]+)/g)) {
+        const raw = m[1].trim();
+        const lit = /^(['"`])([^'"`]+)\1$/.exec(raw);
+        const name = lit ? lit[2] : (/^[A-Za-z_$][\w$]*$/.test(raw) ? consts.get(raw) : null);
+        if (!name || !/^[A-Za-z0-9_-]+$/.test(name) || seen.has(name)) continue;
+        seen.add(name);
+        const tail = code.slice(m.index, m.index + 700);
+        const desc = /description\s*:\s*(['"`])([^'"`]+)\1/.exec(tail);
+        servers.push({
+          name,
+          command: '',
+          args: [],
+          source: full,
+          via: 'extension',
+          description: desc ? desc[2] : ''
+        });
+      }
+    }
+  };
+  scanExtensionDir(path.join(PI_AGENT, 'extensions'), 0);
+  for (const space of readApp().spaces || []) {
+    if (space && space.path) scanExtensionDir(path.join(space.path, '.pi', 'extensions'), 0);
   }
 
   return servers;
@@ -1542,6 +1591,184 @@ function startCronLoop() {
 
 // ---------------------------------------------------------------- 路由
 
+
+// ---------------------------------------------------------------- 检查更新
+// 版本号规则：年份.月份.第几次更新，例如 26.11.1 = 2026 年 11 月第 1 次更新
+const VERSION_RULE = /^\d{2}\.\d{1,2}\.\d+$/;
+const UPDATE_REPOS = [
+  { id: 'gitee', label: 'Gitee',
+    api: 'https://gitee.com/api/v5/repos/georgechou17/Pi-buddy/releases/latest',
+    releases: 'https://gitee.com/georgechou17/Pi-buddy/releases' },
+  { id: 'github', label: 'GitHub',
+    api: 'https://api.github.com/repos/georgechou0517/Pi-buddy/releases/latest',
+    releases: 'https://github.com/georgechou0517/Pi-buddy/releases' }
+];
+const UPDATE_TTL = 5 * 60 * 1000;
+let UPDATE_CACHE = { at: 0, data: null };
+let UPDATE_PENDING = null;
+
+const CN_ZONES = ['Asia/Shanghai', 'Asia/Chongqing', 'Asia/Harbin', 'Asia/Kashgar', 'Asia/Urumqi'];
+
+// 自动模式：后台探测几个「大陆无法直连」的 generate_204 端点。
+// 实测（2026-11-10 湖南郴州移动）：www.google.com / clients3.google.com / youtube.com
+// 均超时；www.gstatic.com 反而返回 204 可达，所以不能当判据。
+// 只有返回 204 才算通（被劫持返回 200 不算），多数通判为海外。
+const OVERSEAS_PROBES = [
+  'https://www.google.com/generate_204',
+  'https://clients3.google.com/generate_204',
+  'https://www.youtube.com/generate_204'
+];
+const DOMESTIC_PROBE = 'https://www.baidu.com/favicon.ico';
+const PROBE_TIMEOUT = 1800;
+const PROBE_TTL = 60 * 60 * 1000;      // 探测成功：缓存 1 小时
+const PROBE_FALLBACK_TTL = 5 * 60 * 1000;
+let PROBE_CACHE = { at: 0, region: null, source: '', ttl: PROBE_TTL };
+let PROBE_PENDING = null;
+
+async function probeReach(url, expect204) {
+  try {
+    const r = await fetch(url, {
+      headers: { 'User-Agent': 'Pi-buddy/' + APP_VERSION, Accept: '*/*' },
+      signal: AbortSignal.timeout(PROBE_TIMEOUT)
+    });
+    await r.arrayBuffer();
+    return expect204 ? r.status === 204 : r.ok;
+  } catch { return false; }
+}
+
+// 返回 overseas / mainland；整体断网时返回 null（不误判成大陆）
+async function detectRegionByProbe() {
+  const [overseas, domestic] = await Promise.all([
+    Promise.all(OVERSEAS_PROBES.map(u => probeReach(u, true))),
+    probeReach(DOMESTIC_PROBE, false)
+  ]);
+  if (!domestic) return null;
+  return overseas.filter(Boolean).length >= 2 ? 'overseas' : 'mainland';
+}
+
+// 仅在探测不可用时使用：系统时区 + 语言判据
+function detectRegionBySystem() {
+  let tz = '', locale = '';
+  try {
+    const o = Intl.DateTimeFormat().resolvedOptions();
+    tz = String(o.timeZone || '');
+    locale = String(o.locale || '');
+  } catch { /* ICU 不可用时按海外处理 */ }
+  if (CN_ZONES.indexOf(tz) >= 0) return 'cn';
+  const simplified = /^zh([-_]|$)/i.test(locale) && !/^zh[-_](HK|TW|Hant)/i.test(locale);
+  if (simplified && new Date().getTimezoneOffset() === -480 && /^Asia\//.test(tz)) return 'cn';
+  return 'global';
+}
+
+// 优先级：设置页手动选择 > 环境变量 > Google 连通性探测 > 系统区域
+async function detectRegionAsync() {
+  let chosen = '';
+  try { chosen = String((readApp().ui || {}).updateSource || '').toLowerCase(); } catch { /* 配置读不到就走自动 */ }
+  if (chosen === 'gitee' || chosen === 'github') {
+    return { region: chosen === 'gitee' ? 'cn' : 'global', regionSource: 'manual' };
+  }
+  const forced = String(process.env.PIBUDDY_REGION || '').toLowerCase();
+  if (forced === 'cn' || forced === 'global') {
+    return { region: forced, regionSource: 'env' };
+  }
+  const c = PROBE_CACHE;
+  if (c.region && Date.now() - c.at < c.ttl) {
+    return { region: c.region, regionSource: c.source };
+  }
+  if (PROBE_PENDING) return PROBE_PENDING;
+  PROBE_PENDING = (async () => {
+    const probe = await detectRegionByProbe();
+    const source = probe ? 'auto' : 'system';
+    const region = probe ? (probe === 'overseas' ? 'global' : 'cn') : detectRegionBySystem();
+    PROBE_CACHE = {
+      at: Date.now(), region, source,
+      ttl: source === 'auto' ? PROBE_TTL : PROBE_FALLBACK_TTL
+    };
+    return { region, regionSource: source };
+  })().finally(() => { PROBE_PENDING = null; });
+  return PROBE_PENDING;
+}
+
+function parseVersion(raw) {
+  const m = /^v?(\d{1,4})\.(\d{1,2})\.(\d{1,4})$/i.exec(String(raw || '').trim());
+  return m ? [Number(m[1]), Number(m[2]), Number(m[3])] : null;
+}
+
+function compareVersion(a, b) {
+  const x = parseVersion(a), y = parseVersion(b);
+  if (!x || !y) return null;
+  for (let i = 0; i < 3; i++) { if (x[i] !== y[i]) return x[i] > y[i] ? 1 : -1; }
+  return 0;
+}
+
+async function fetchLatestRelease(repo) {
+  const r = await fetch(repo.api, {
+    headers: { 'User-Agent': 'Pi-buddy/' + APP_VERSION, Accept: 'application/json' },
+    signal: AbortSignal.timeout(8000)
+  });
+  if (!r.ok) throw new Error('HTTP ' + r.status);
+  const j = await r.json();
+  const tag = String(j.tag_name || '');
+  if (!parseVersion(tag)) throw new Error('无法识别的版本标签: ' + tag);
+  const version = tag.replace(/^v/i, '');
+  const page = repo.releases + '/tag/' + encodeURIComponent(tag);
+  const assets = Array.isArray(j.assets) ? j.assets : [];
+  const exe = assets.find(a => /\.exe$/i.test(a.name || '') &&
+    /^https:\/\//i.test(a.browser_download_url || ''));
+  return {
+    id: repo.id, label: repo.label, ok: true, tag, version,
+    modern: VERSION_RULE.test(version),
+    name: String(j.name || ''),
+    publishedAt: j.published_at || j.created_at || '',
+    page, releases: repo.releases,
+    download: exe ? exe.browser_download_url : page,
+    hasInstaller: !!exe
+  };
+}
+
+async function checkUpdate(force) {
+  if (!force && UPDATE_CACHE.data && Date.now() - UPDATE_CACHE.at < UPDATE_TTL) {
+    return Object.assign({}, UPDATE_CACHE.data, { cached: true });
+  }
+  if (UPDATE_PENDING) return UPDATE_PENDING;
+  UPDATE_PENDING = (async () => {
+    const sources = await Promise.all(UPDATE_REPOS.map(async repo => {
+      try { return await fetchLatestRelease(repo); }
+      catch (err) {
+        return { id: repo.id, label: repo.label, ok: false,
+          error: err.message, page: repo.releases, releases: repo.releases };
+      }
+    }));
+    const { region, regionSource } = await detectRegionAsync();
+    const primaryId = region === 'cn' ? 'gitee' : 'github';
+    sources.sort((a, b) => Number(b.id === primaryId) - Number(a.id === primaryId));
+    for (const s of sources) s.primary = s.id === primaryId;
+    const good = sources.filter(s => s.ok);
+    // 版本判定与下载都以主源为准；主源不可用时才降级到备用源
+    const primaryOk = good.find(s => s.primary);
+    const latest = primaryOk || good[0] || null;
+    const cmp = latest ? compareVersion(latest.version, APP_VERSION) : null;
+    const data = {
+      ok: true,
+      current: APP_VERSION,
+      modern: VERSION_RULE.test(APP_VERSION),
+      region,
+      regionSource,
+      primary: primaryId,
+      primaryLabel: (UPDATE_REPOS.find(r => r.id === primaryId) || {}).label || '',
+      fallbackUsed: !primaryOk && !!latest,
+      latest: latest ? latest.version : null,
+      latestTag: latest ? latest.tag : null,
+      upToDate: cmp === null ? null : cmp <= 0,
+      sources,
+      checkedAt: new Date().toISOString(),
+      cached: false
+    };
+    UPDATE_CACHE = { at: Date.now(), data };
+    return data;
+  })().finally(() => { UPDATE_PENDING = null; });
+  return UPDATE_PENDING;
+}
 const MIME = {
   '.html': 'text/html; charset=utf-8',
   '.js': 'text/javascript; charset=utf-8',
@@ -1654,6 +1881,18 @@ async function handleRequest(req, res) {
   }
 
 
+  // 检查更新：并发查询 Gitee 与 GitHub 的最新 Release
+  if (pathname === '/api/update/check' && req.method === 'GET') {
+    try {
+      json(res, 200, await checkUpdate(parsed.searchParams.get('force') === '1'));
+    } catch (err) {
+      json(res, 200, {
+        ok: true, current: APP_VERSION, latest: null, upToDate: null,
+        sources: [], error: err.message, checkedAt: new Date().toISOString()
+      });
+    }
+    return;
+  }
   // 重新检测 Pi（安装完不用重启服务）
   if (pathname === '/api/pi' && req.method === 'GET') {
     PI_ENTRY = null;

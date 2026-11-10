@@ -27,7 +27,7 @@ Pi-buddy 是 Pi 的**本地前端**：它不替代 Pi，而是把 Pi 的会话�
 **模型、技能与连接器**
 - 模型热切换、连通性测试、手动添加自定义模型；按服务商列出可用模型
 - 技能：扫描用户级与项目级多个目录，可单独启停
-- MCP 连接器：用户级与项目级配置都能读到，可单独启停
+- MCP 连接器：读取用户级与项目级 `mcp.json`，也识别 Pi 扩展里 `registerMcpServer()` 动态注册的连接器；可单独启停
 - 专家预设（办公 / 开发 / 设计）一次挂好模式、系统提示词、技能与连接器；场景预设一键切换
 - 没装 Pi 时首页直接给出安装命令，装完点「重新检测」即可，不必重启
 
@@ -79,6 +79,7 @@ Pi-buddy 是 Pi 的**本地前端**：它不替代 Pi，而是把 Pi 的会话�
 - 需要 Node.js 20+，以及用户自行安装的 Pi CLI（`npm install -g @earendil-works/pi-coding-agent`）。本项目**不捆绑 Pi 的代码**，只通过 `pi --mode rpc` 子进程通信，按 LF 切分 JSONL，再用 SSE 推给浏览器。
 - 默认 `127.0.0.1:7788`；端口被占用或落在系统保留段时自动 +1。配置存 `data/app.json`，上传的 LOGO 存 `data/`，日志存 `data/server.log`。
 - 分发包是手动制作的自解压压缩包（Bandizip SFX 格式），只含程序文件，不含任何运行时。
+- 版本号采用 **年份.月份.第几次更新**（如 `26.11.1`）；设置页的「检查更新」同时查询 Gitee 与 GitHub 的最新 Release，**下载源可选「自动 / Gitee / GitHub」，默认自动**，并以主源的版本为准。自动模式在后台探测 `google.com` 等大陆无法直连的 `generate_204` 端点（多数可达判为海外 → GitHub，否则 → Gitee），整体断网时回退到系统区域判断；也可用 `PIBUDDY_REGION=cn|global` 覆盖。
 - 双语实现为中文源文 + 渲染层替换，不改动任何业务数据与聊天内容。
 
 <a id="license-zh"></a>
@@ -128,7 +129,7 @@ Pi-buddy is a **local front-end** for [Pi](https://pi.dev), the terminal coding 
 **Models, skills & connectors**
 - Hot-swap models, test connectivity, add custom models; available models grouped by provider.
 - Skills: scans both user-level and project-level directories, individually toggleable.
-- MCP connectors: reads user-level and project-level config, individually toggleable.
+- MCP connectors: reads user-level and project-level `mcp.json`, and also detects servers registered dynamically by Pi extensions via `registerMcpServer()`; individually toggleable.
 - Expert presets (Office / Dev / Design) attach mode, system prompt, skills and connectors in one click; scene presets switch context instantly.
 - If Pi is missing, the home page shows the install command; click "Check again" after installing — no restart needed.
 
@@ -180,6 +181,7 @@ Pi-buddy is a **local front-end** for [Pi](https://pi.dev), the terminal coding 
 - Requires Node.js 20+ and a user-installed Pi CLI (`npm install -g @earendil-works/pi-coding-agent`). **No Pi code is bundled**: Pi-buddy spawns `pi --mode rpc`, splits its JSONL output on LF, and streams events to the browser over SSE.
 - Defaults to `127.0.0.1:7788`; the port increments automatically when occupied or reserved by the OS. Settings live in `data/app.json`, uploaded logos in `data/`, logs in `data/server.log`.
 - Distributed as a manually built self-extracting archive (Bandizip SFX) containing program files only — no runtime included.
+- Versions follow **year.month.sequence** (e.g. `26.11.1`). “Check for updates” in Settings queries both Gitee and GitHub; **the download source can be set to Auto / Gitee / GitHub (Auto by default)**, and the preferred source decides the latest version. Auto mode probes `generate_204` endpoints such as `google.com` that are not directly reachable from mainland China (reachable from most probes → GitHub; otherwise → Gitee), falling back to the system region when the network is down. Override with `PIBUDDY_REGION=cn|global`.
 - Bilingual UI = Chinese source text plus a render-time replacement layer; business data and chat content are untouched.
 
 <a id="license-en"></a>
