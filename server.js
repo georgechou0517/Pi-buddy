@@ -35,7 +35,7 @@ const { spawn } = require('node:child_process');
 
 // ---------------------------------------------------------------- 常量
 
-const APP_VERSION = '26.11.1';
+const APP_VERSION = '26.11.2';
 const ROOT = __dirname;
 const INDEX_HTML = path.join(ROOT, 'index.html');
 const DATA_DIR = path.join(ROOT, 'data');
@@ -81,6 +81,7 @@ const DEFAULT_APP = {
   mcp: { disabled: [] },
   spaces: [],
   pinned: [],
+  qqbots: [],
   lastModel: null,
   logo: null,
   notify: { mode: 'browser' },
@@ -641,6 +642,14 @@ class Session {
         return;
       }
 
+      case 'tool_execution_update': {
+        const partial = toolResultText(ev.partialResult);
+        if (partial) {
+          this.push({ type: 'tool', phase: 'update', id: ev.toolCallId, partial: shortText(partial, 6000) });
+        }
+        return;
+      }
+
       case 'tool_execution_end': {
         const target = this.pendingToolPaths.get(ev.toolCallId);
         if (target && !ev.isError) this.addArtifact(target, 'tool');
@@ -651,7 +660,8 @@ class Session {
           id: ev.toolCallId,
           name: ev.toolName,
           isError: !!ev.isError,
-          durationMs: ev.durationMs
+          durationMs: ev.durationMs,
+          output: shortText(toolResultText(ev.result), 6000)
         });
         return;
       }
@@ -832,6 +842,26 @@ class Session {
     };
     await walk(this.meta.cwd, 0);
   }
+}
+
+/** 工具 result 结构不固定：字符串 / {content:[{text}]} / {stdout,stderr} / 任意对象 */
+function toolResultText(result) {
+  if (result == null) return '';
+  if (typeof result === 'string') return result;
+  if (Array.isArray(result)) return result.map(toolResultText).filter(Boolean).join('\n');
+  if (typeof result === 'object') {
+    if (Array.isArray(result.content)) {
+      const t = result.content
+        .map(c => (typeof c === 'string' ? c : (c && (c.text || c.output)) || ''))
+        .filter(Boolean).join('\n');
+      if (t) return t;
+    }
+    for (const k of ['stdout', 'output', 'text', 'message', 'error', 'stderr']) {
+      if (typeof result[k] === 'string' && result[k]) return result[k];
+    }
+    try { return JSON.stringify(result); } catch { return ''; }
+  }
+  return String(result);
 }
 
 function summarizeToolArgs(args) {
